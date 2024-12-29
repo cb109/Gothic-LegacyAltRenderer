@@ -50,11 +50,12 @@ std::atomic<bool> selected_rdepth = true;
 std::atomic<bool> selected_vsync = false;
 std::atomic<int> selected_option = 0;
 std::atomic<int> selected_msaa = 0;
+std::atomic<int> selected_skipui = 0;
 
 bool IsG1 = false;
 bool IsG2 = false;
 
-static void LoadCFG(HWND hWnd, HWND rendererBox, HWND msaaBox)
+static void LoadCFGFromFile()
 {
 	char executablePath[MAX_PATH];
 	GetModuleFileNameA(GetModuleHandleA(nullptr), executablePath, sizeof(executablePath));
@@ -62,29 +63,29 @@ static void LoadCFG(HWND hWnd, HWND rendererBox, HWND msaaBox)
 
 	FILE* f;
 	errno_t err = fopen_s(&f, (std::string(executablePath) + "\\legacyaltrenderer.ini").c_str(), "r");
-	if(err == 0)
+	if (err == 0)
 	{
 		char readedLine[1024];
-		while(fgets(readedLine, sizeof(readedLine), f) != nullptr)
+		while (fgets(readedLine, sizeof(readedLine), f) != nullptr)
 		{
 			size_t len = strlen(readedLine);
-			if(len > 0)
+			if (len > 0)
 			{
-				if(readedLine[len - 1] == '\n' || readedLine[len - 1] == '\r')
+				if (readedLine[len - 1] == '\n' || readedLine[len - 1] == '\r')
 					len -= 1;
-				if(len > 0)
+				if (len > 0)
 				{
-					if(readedLine[len - 1] == '\n' || readedLine[len - 1] == '\r')
+					if (readedLine[len - 1] == '\n' || readedLine[len - 1] == '\r')
 						len -= 1;
 				}
 			}
-			if(len == 0)
+			if (len == 0)
 				continue;
 
 			std::size_t eqpos;
 			std::string rLine = std::string(readedLine, len);
 			std::transform(rLine.begin(), rLine.end(), rLine.begin(), toupper);
-			if((eqpos = rLine.find("=")) != std::string::npos)
+			if ((eqpos = rLine.find("=")) != std::string::npos)
 			{
 				std::string lhLine = rLine.substr(0, eqpos);
 				std::string rhLine = rLine.substr(eqpos + 1);
@@ -92,26 +93,33 @@ static void LoadCFG(HWND hWnd, HWND rendererBox, HWND msaaBox)
 				lhLine.erase(0, lhLine.find_first_not_of(' '));
 				rhLine.erase(rhLine.find_last_not_of(' ') + 1);
 				rhLine.erase(0, rhLine.find_first_not_of(' '));
-				if(lhLine == "LIGHTHACK")
+				if (lhLine == "LIGHTHACK")
 					selected_lighthack.store(rhLine == "TRUE" || rhLine == "1");
-				else if(lhLine == "REVERSEDDEPTHBUFFER")
+				else if (lhLine == "REVERSEDDEPTHBUFFER")
 					selected_rdepth.store(rhLine == "TRUE" || rhLine == "1");
-				else if(lhLine == "VSYNC")
+				else if (lhLine == "VSYNC")
 					selected_vsync.store(rhLine == "TRUE" || rhLine == "1");
-				else if(lhLine == "MSAA")
+				else if (lhLine == "SKIPUI")
+					selected_skipui.store(rhLine == "TRUE" || rhLine == "1");
+				else if (lhLine == "MSAA")
 				{
-					try {selected_msaa.store(std::stoi(rhLine));}
-					catch(const std::exception&) {selected_msaa.store(0);}
+					try { selected_msaa.store(std::stoi(rhLine)); }
+					catch (const std::exception&) { selected_msaa.store(0); }
 				}
-				else if(lhLine == "RENDERER")
+				else if (lhLine == "RENDERER")
 				{
-					try {selected_option.store(std::stoi(rhLine));}
-					catch(const std::exception&) {selected_option.store(0);}
+					try { selected_option.store(std::stoi(rhLine)); }
+					catch (const std::exception&) { selected_option.store(0); }
 				}
 			}
 		}
 		fclose(f);
 	}
+}
+
+static void SyncCFGToUi(HWND hWnd, HWND rendererBox, HWND msaaBox)
+{
+	LoadCFGFromFile();
 
 	CheckDlgButton(hWnd, option_lighthack, (selected_lighthack.load() ? BST_CHECKED : BST_UNCHECKED));
 	CheckDlgButton(hWnd, option_reversedepth, (selected_rdepth.load() ? BST_CHECKED : BST_UNCHECKED));
@@ -147,6 +155,7 @@ static void SaveCFG()
 		fputs((std::string("VSync = ") + (selected_vsync.load() ? "True\n" : "False\n")).c_str(), f);
 		fputs((std::string("MSAA = ") + std::to_string(selected_msaa.load()) + "\n").c_str(), f);
 		fputs((std::string("Renderer = ") + std::to_string(selected_option.load()) + "\n").c_str(), f);
+		fputs((std::string("SkipUi = ") + (selected_skipui.load() ? "True\n" : "False\n")).c_str(), f);
 		fclose(f);
 	}
 }
@@ -657,7 +666,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 			CreateWindow(L"button", L"Vertical Synchronization", (WS_CHILD|WS_VISIBLE|BS_CHECKBOX), 5, 220, 185, 18, hWnd, reinterpret_cast<HMENU>(option_vsync), 0, 0);
 			CreateWindow(L"button", L"Launch", (WS_CHILD|WS_VISIBLE|WS_BORDER), 5, 245, 185, 30, hWnd, reinterpret_cast<HMENU>(option_launch), 0, 0);
 
-			LoadCFG(hWnd, lbox, abox);
+			SyncCFGToUi(hWnd, lbox, abox);
 		}
 		break;
 		case WM_COMMAND:
@@ -705,6 +714,14 @@ void InitRenderChoosing()
 {
 	int res = 7;
 	selected_option.store(res);
+
+	LoadCFGFromFile();
+	if (selected_skipui.load()) 
+	{
+		// Skip UI altogether and continue to launch the game immediately.
+		// Settings can still be modified within the legacyaltrenderer.ini.
+		return;
+	}
 
 	WNDCLASSEX wcex;
 	wcex.cbSize = sizeof(WNDCLASSEX);
